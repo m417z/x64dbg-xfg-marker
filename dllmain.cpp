@@ -7,6 +7,10 @@
 #define DLL_EXPORT __declspec(dllexport)
 #endif
 
+#ifndef IMAGE_GUARD_XFG_ENABLED
+#define IMAGE_GUARD_XFG_ENABLED 0x00800000
+#endif
+
 #ifndef IMAGE_GUARD_FLAG_FID_XFG
 #define IMAGE_GUARD_FLAG_FID_XFG 8  // Call target supports XFG
 #endif
@@ -84,7 +88,7 @@ bool ReadMemAndAdvance(DWORD_PTR* address, T* target) {
 
 DWORD_PTR GetCfgFunctionTable(DWORD_PTR module,
                               DWORD_PTR* guardCFFunctionCountOut,
-                              DWORD_PTR* mdSizeOut) {
+                              DWORD* guardFlagsOut) {
     DWORD_PTR ntHeader = GetNtHeader(module);
     if (!ntHeader) {
         return 0;
@@ -148,8 +152,7 @@ DWORD_PTR GetCfgFunctionTable(DWORD_PTR module,
     }
 
     *guardCFFunctionCountOut = guardCFFunctionCount;
-    *mdSizeOut = (guardFlags & IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK) >>
-                 IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_SHIFT;
+    *guardFlagsOut = guardFlags;
 
     return guardCFFunctionTable;
 }
@@ -162,11 +165,23 @@ bool XfgMark() {
     }
 
     DWORD_PTR cfgFunctionCount;
-    DWORD_PTR mdSize;
+    DWORD guardFlags;
     DWORD_PTR cfgFunctionTable =
-        GetCfgFunctionTable(module, &cfgFunctionCount, &mdSize);
+        GetCfgFunctionTable(module, &cfgFunctionCount, &guardFlags);
     if (!cfgFunctionTable) {
         _plugin_logputs("No CFG function table found");
+        return false;
+    }
+
+    if ((guardFlags & IMAGE_GUARD_XFG_ENABLED) == 0) {
+        _plugin_logputs("XFG isn't enabled for the target module");
+        return false;
+    }
+
+    DWORD mdSize = (guardFlags & IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK) >>
+                   IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_SHIFT;
+    if (mdSize == 0) {
+        _plugin_logputs("mdSize is zero");
         return false;
     }
 
