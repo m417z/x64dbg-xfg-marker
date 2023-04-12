@@ -1,7 +1,7 @@
 #include "pch.h"
 
-#define PLUGIN_VERSION 10
-#define PLUGIN_VERSION_STR "1.0"
+#define PLUGIN_VERSION 101
+#define PLUGIN_VERSION_STR "1.0.1"
 
 #ifndef DLL_EXPORT
 #define DLL_EXPORT __declspec(dllexport)
