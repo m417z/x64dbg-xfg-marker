@@ -22,6 +22,7 @@ enum {
 };
 
 HINSTANCE g_hDllInst;
+int g_pluginHandle;
 
 DWORD_PTR GetCpuModule() {
     SELECTIONDATA selection;
@@ -259,56 +260,35 @@ BOOL APIENTRY DllMain(HMODULE hModule,
     return TRUE;
 }
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-DLL_EXPORT void plugsetup(PLUG_SETUPSTRUCT* setupStruct);
-DLL_EXPORT bool pluginit(PLUG_INITSTRUCT* initStruct);
-DLL_EXPORT CDECL void CBWINEVENT(CBTYPE cbType, PLUG_CB_WINEVENT* info);
-DLL_EXPORT CDECL void CBMENUENTRY(CBTYPE cbType, void* callbackInfo);
-
-#ifdef __cplusplus
-}
-#endif
-
-DLL_EXPORT void plugsetup(PLUG_SETUPSTRUCT* setupStruct) {
-    int hMenu = setupStruct->hMenu;
-
-    _plugin_menuaddentry(hMenu, MENU_XFG_MARK, "Mark &XFG\tCtrl+Shift+X");
-}
-
-DLL_EXPORT bool pluginit(PLUG_INITSTRUCT* initStruct) {
+extern "C" DLL_EXPORT bool pluginit(PLUG_INITSTRUCT* initStruct) {
     initStruct->pluginVersion = PLUGIN_VERSION;
     initStruct->sdkVersion = PLUG_SDKVERSION;
     strcpy_s(initStruct->pluginName, "XFG Marker");
-    int pluginHandle = initStruct->pluginHandle;
+    g_pluginHandle = initStruct->pluginHandle;
 
     _plugin_logputs("XFG Marker v" PLUGIN_VERSION_STR);
     _plugin_logputs("  By m417z");
 
-    _plugin_registercommand(pluginHandle, "xfg_mark", XfgMarkCmd, true);
+    _plugin_registercommand(g_pluginHandle, "xfg_mark", XfgMarkCmd, true);
 
     return true;
 }
 
-DLL_EXPORT CDECL void CBWINEVENT(CBTYPE cbType, PLUG_CB_WINEVENT* info) {
-    MSG* pMsg = info->message;
+extern "C" DLL_EXPORT void plugsetup(PLUG_SETUPSTRUCT* setupStruct) {
+    int hMenu = setupStruct->hMenu;
 
-    if (info->result && pMsg->message == WM_KEYUP && pMsg->wParam == 'X') {
-        bool ctrlDown = GetKeyState(VK_CONTROL) < 0;
-        bool altDown = GetKeyState(VK_MENU) < 0;
-        bool shiftDown = GetKeyState(VK_SHIFT) < 0;
-
-        if (!altDown && ctrlDown && shiftDown) {
-            XfgMark();
-            *info->result = 0;
-            info->retval = true;
-            return;
-        }
-    }
+    _plugin_menuaddentry(hMenu, MENU_XFG_MARK, "Mark &XFG");
+    _plugin_menuentrysethotkey(g_pluginHandle, MENU_XFG_MARK, "Ctrl+Shift+X");
 }
 
-DLL_EXPORT CDECL void CBMENUENTRY(CBTYPE cbType, void* callbackInfo) {
-    XfgMark();
+extern "C" DLL_EXPORT void CBMENUENTRY(CBTYPE, PLUG_CB_MENUENTRY* info) {
+    switch (info->hEntry) {
+        case MENU_XFG_MARK:
+            if (!DbgIsDebugging()) {
+                break;
+            }
+
+            XfgMark();
+            break;
+    }
 }
