@@ -264,16 +264,18 @@ std::string GetCommentForXfgTargets(std::span<const DWORD_PTR> xfgEntries) {
 
         SymbolInfoWrapper info;
         char symbolNameOnly[1024];
-        if (!DbgGetSymbolInfoAt(function, info.put()) ||
-            !info->decoratedSymbol ||
-            !UnDecorateSymbolName(info->decoratedSymbol, symbolNameOnly,
-                                  ARRAYSIZE(symbolNameOnly),
-                                  UNDNAME_NAME_ONLY)) {
-            char buffer[32];
-            sprintf_s(buffer, "%p", reinterpret_cast<void*>(function));
-            comment += buffer;
-        } else {
+        if (DbgGetSymbolInfoAt(function, info.put()) && info->decoratedSymbol &&
+            UnDecorateSymbolName(info->decoratedSymbol, symbolNameOnly,
+                                 ARRAYSIZE(symbolNameOnly),
+                                 UNDNAME_NAME_ONLY)) {
             comment += symbolNameOnly;
+        } else {
+            char label[MAX_LABEL_SIZE] = "";
+            if (!DbgGetLabelAt(function, SEG_DEFAULT, label)) {
+                sprintf_s(label, "%p", reinterpret_cast<void*>(function));
+            }
+
+            comment += label;
         }
     }
 
