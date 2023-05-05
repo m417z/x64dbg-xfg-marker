@@ -539,7 +539,7 @@ void About(HWND hWnd) {
         .cbSize = sizeof(taskDialogConfig),
         .hwndParent = hWnd,
         .hInstance = g_hDllInst,
-        .dwFlags = TDF_ENABLE_HYPERLINKS,
+        .dwFlags = TDF_ENABLE_HYPERLINKS | TDF_ALLOW_DIALOG_CANCELLATION,
         .pszWindowTitle = L"About",
         .pszMainIcon = TD_INFORMATION_ICON,
         .pszContent = content,
