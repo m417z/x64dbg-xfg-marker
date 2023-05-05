@@ -12,3 +12,12 @@ The plugin goes over all XFG function call signatures and marks them as 8-byte
 integers, creating a clear separation between the signature and the function.
 
 ![XFG Marker Plugin demo](demo.gif)
+
+## Xrefs and comments
+
+The plugin also has the options to add comments with the possible indirect call
+target functions, and to add xrefs between the indirect call and each target
+function for easy navigation.
+
+For more details, refer to the relevant [blog
+post](https://m417z.com/Leveraging-XFG-to-help-with-reverse-engineering/).
