@@ -1,5 +1,7 @@
 #include "pch.h"
 
+#include "resource.h"
+
 #define PLUGIN_NAME "XFG Marker"
 #define PLUGIN_VERSION 101
 #define PLUGIN_VERSION_STR "1.0.1"
@@ -550,6 +552,24 @@ extern "C" DLL_EXPORT bool pluginit(PLUG_INITSTRUCT* initStruct) {
 
 extern "C" DLL_EXPORT void plugsetup(PLUG_SETUPSTRUCT* setupStruct) {
     int hMenu = setupStruct->hMenu;
+
+    HRSRC resource =
+        FindResource(g_hDllInst, MAKEINTRESOURCE(IDB_ICON), L"PNG");
+    if (resource) {
+        HGLOBAL memory = LoadResource(g_hDllInst, resource);
+        if (memory) {
+            PVOID data = LockResource(memory);
+            if (data) {
+                DWORD size = SizeofResource(g_hDllInst, resource);
+                ICONDATA iconData{
+                    .data = data,
+                    .size = size,
+                };
+
+                _plugin_menuseticon(hMenu, &iconData);
+            }
+        }
+    }
 
     _plugin_menuaddentry(hMenu, MENU_XFG_MARK, "Mark &XFG");
     _plugin_menuaddseparator(hMenu);
