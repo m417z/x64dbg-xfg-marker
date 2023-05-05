@@ -1,5 +1,6 @@
 #include "pch.h"
 
+#define PLUGIN_NAME "XFG Marker"
 #define PLUGIN_VERSION 101
 #define PLUGIN_VERSION_STR "1.0.1"
 
@@ -17,13 +18,17 @@
 
 namespace {
 
-enum {
-    MENU_XFG_MARK = 1,
-    MENU_ABOUT,
-};
-
 HINSTANCE g_hDllInst;
 int g_pluginHandle;
+bool g_addXrefs = true;
+bool g_addComments = true;
+
+enum {
+    MENU_XFG_MARK = 1,
+    MENU_TOGGLE_XREFS,
+    MENU_TOGGLE_COMMENTS,
+    MENU_ABOUT,
+};
 
 class SymbolInfoWrapper {
    public:
@@ -355,20 +360,25 @@ std::optional<MarkXrefAndCommentsResult> MarkXrefAndComments(
             DWORD_PTR xfgUsageCommand =
                 executableRegionAddress + (it - executableRegion.begin());
 
-            for (DWORD_PTR xfgEntry : xfgHashInfo.entries) {
-                DWORD_PTR function = xfgEntry + sizeof(DWORD_PTR);
-                DbgXrefAdd(xfgUsageCommand, function);
-                DbgXrefAdd(function, xfgUsageCommand);
-                result.xrefCount++;
+            if (g_addXrefs) {
+                for (DWORD_PTR xfgEntry : xfgHashInfo.entries) {
+                    DWORD_PTR function = xfgEntry + sizeof(DWORD_PTR);
+                    DbgXrefAdd(xfgUsageCommand, function);
+                    DbgXrefAdd(function, xfgUsageCommand);
+                    result.xrefCount++;
+                }
             }
 
-            if (xfgHashInfo.comment.empty()) {
-                xfgHashInfo.comment =
-                    GetCommentForXfgTargets(xfgHashInfo.entries);
-            }
+            if (g_addComments) {
+                if (xfgHashInfo.comment.empty()) {
+                    xfgHashInfo.comment =
+                        GetCommentForXfgTargets(xfgHashInfo.entries);
+                }
 
-            DbgSetAutoCommentAt(xfgUsageCommand, xfgHashInfo.comment.c_str());
-            result.commentCount++;
+                DbgSetAutoCommentAt(xfgUsageCommand,
+                                    xfgHashInfo.comment.c_str());
+                result.commentCount++;
+            }
         }
     }
 
@@ -461,21 +471,26 @@ bool XfgMark() {
         }
 
 #ifdef _WIN64
-        if (auto markXrefAndCommentsResult =
-                MarkXrefAndComments(module, xfgEntries)) {
-            if (markXrefAndCommentsResult->xrefCount > 0) {
-                msg += ", added " +
-                       std::to_string(markXrefAndCommentsResult->xrefCount) +
-                       " xrefs";
-            }
+        if (g_addXrefs || g_addComments) {
+            auto markXrefAndCommentsResult =
+                MarkXrefAndComments(module, xfgEntries);
+            if (markXrefAndCommentsResult) {
+                if (markXrefAndCommentsResult->xrefCount > 0) {
+                    msg +=
+                        ", added " +
+                        std::to_string(markXrefAndCommentsResult->xrefCount) +
+                        " xrefs";
+                }
 
-            if (markXrefAndCommentsResult->commentCount > 0) {
-                msg += ", added " +
-                       std::to_string(markXrefAndCommentsResult->commentCount) +
-                       " comments";
-            }
+                if (markXrefAndCommentsResult->commentCount > 0) {
+                    msg += ", added " +
+                           std::to_string(
+                               markXrefAndCommentsResult->commentCount) +
+                           " comments";
+                }
 
-            warningCount += markXrefAndCommentsResult->warningCount;
+                warningCount += markXrefAndCommentsResult->warningCount;
+            }
         }
 #endif  // _WIN64
 
@@ -522,10 +537,10 @@ BOOL APIENTRY DllMain(HMODULE hModule,
 extern "C" DLL_EXPORT bool pluginit(PLUG_INITSTRUCT* initStruct) {
     initStruct->pluginVersion = PLUGIN_VERSION;
     initStruct->sdkVersion = PLUG_SDKVERSION;
-    strcpy_s(initStruct->pluginName, "XFG Marker");
+    strcpy_s(initStruct->pluginName, PLUGIN_NAME);
     g_pluginHandle = initStruct->pluginHandle;
 
-    _plugin_logputs("XFG Marker v" PLUGIN_VERSION_STR);
+    _plugin_logputs(PLUGIN_NAME " v" PLUGIN_VERSION_STR);
     _plugin_logputs("  By m417z");
 
     _plugin_registercommand(g_pluginHandle, "xfg_mark", XfgMarkCmd, true);
@@ -538,7 +553,25 @@ extern "C" DLL_EXPORT void plugsetup(PLUG_SETUPSTRUCT* setupStruct) {
 
     _plugin_menuaddentry(hMenu, MENU_XFG_MARK, "Mark &XFG");
     _plugin_menuaddseparator(hMenu);
+    _plugin_menuaddentry(hMenu, MENU_TOGGLE_XREFS, "Add xrefs");
+    _plugin_menuaddentry(hMenu, MENU_TOGGLE_COMMENTS, "Add comments");
+    _plugin_menuaddseparator(hMenu);
     _plugin_menuaddentry(hMenu, MENU_ABOUT, "&About");
+
+    duint val;
+
+    if (BridgeSettingGetUint(PLUGIN_NAME, "AddXrefs", &val)) {
+        g_addXrefs = val;
+    }
+
+    _plugin_menuentrysetchecked(g_pluginHandle, MENU_TOGGLE_XREFS, g_addXrefs);
+
+    if (BridgeSettingGetUint(PLUGIN_NAME, "AddComments", &val)) {
+        g_addComments = val;
+    }
+
+    _plugin_menuentrysetchecked(g_pluginHandle, MENU_TOGGLE_COMMENTS,
+                                g_addComments);
 
     _plugin_menuentrysethotkey(g_pluginHandle, MENU_XFG_MARK, "Ctrl+Shift+X");
 }
@@ -553,13 +586,28 @@ extern "C" DLL_EXPORT void CBMENUENTRY(CBTYPE, PLUG_CB_MENUENTRY* info) {
             XfgMark();
             break;
 
+        case MENU_TOGGLE_XREFS:
+            g_addXrefs = !g_addXrefs;
+            BridgeSettingSetUint(PLUGIN_NAME, "AddXrefs", g_addXrefs);
+            _plugin_menuentrysetchecked(g_pluginHandle, MENU_TOGGLE_XREFS,
+                                        g_addXrefs);
+            break;
+
+        case MENU_TOGGLE_COMMENTS:
+            g_addComments = !g_addComments;
+            BridgeSettingSetUint(PLUGIN_NAME, "AddComments", g_addComments);
+            _plugin_menuentrysetchecked(g_pluginHandle, MENU_TOGGLE_COMMENTS,
+                                        g_addComments);
+            break;
+
         case MENU_ABOUT:
-            MessageBox(
-                GetActiveWindow(),
-                L"XFG Marker v" TEXT(PLUGIN_VERSION_STR) L"\n" 
-                L"By m417z\n" 
-                L"https://github.com/m417z/x64dbg-xfg-marker",
-                L"About", MB_ICONINFORMATION);
+            MessageBoxA(GetActiveWindow(),
+                        PLUGIN_NAME
+                        " v" PLUGIN_VERSION_STR
+                        "\n"
+                        "By m417z\n"
+                        "https://github.com/m417z/x64dbg-xfg-marker",
+                        "About", MB_ICONINFORMATION);
             break;
     }
 }
