@@ -19,6 +19,7 @@ namespace {
 
 enum {
     MENU_XFG_MARK = 1,
+    MENU_ABOUT,
 };
 
 HINSTANCE g_hDllInst;
@@ -278,6 +279,9 @@ extern "C" DLL_EXPORT void plugsetup(PLUG_SETUPSTRUCT* setupStruct) {
     int hMenu = setupStruct->hMenu;
 
     _plugin_menuaddentry(hMenu, MENU_XFG_MARK, "Mark &XFG");
+    _plugin_menuaddseparator(hMenu);
+    _plugin_menuaddentry(hMenu, MENU_ABOUT, "&About");
+
     _plugin_menuentrysethotkey(g_pluginHandle, MENU_XFG_MARK, "Ctrl+Shift+X");
 }
 
@@ -289,6 +293,15 @@ extern "C" DLL_EXPORT void CBMENUENTRY(CBTYPE, PLUG_CB_MENUENTRY* info) {
             }
 
             XfgMark();
+            break;
+
+        case MENU_ABOUT:
+            MessageBox(
+                GetActiveWindow(),
+                L"XFG Marker v" TEXT(PLUGIN_VERSION_STR) L"\n" 
+                L"By m417z\n" 
+                L"https://github.com/m417z/x64dbg-xfg-marker",
+                L"About", MB_ICONINFORMATION);
             break;
     }
 }
