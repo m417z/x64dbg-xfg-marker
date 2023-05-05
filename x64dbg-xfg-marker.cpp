@@ -25,6 +25,36 @@ enum {
 HINSTANCE g_hDllInst;
 int g_pluginHandle;
 
+class SymbolInfoWrapper {
+   public:
+    SymbolInfoWrapper() = default;
+    ~SymbolInfoWrapper() { free(); }
+
+    SymbolInfoWrapper(const SymbolInfoWrapper&) = delete;
+    SymbolInfoWrapper& operator=(const SymbolInfoWrapper&) = delete;
+
+    SYMBOLINFO* put() {
+        free();
+        memset(&info, 0, sizeof(info));
+        return &info;
+    }
+
+    const SYMBOLINFO* get() const { return &info; }
+    const SYMBOLINFO* operator->() const { return &info; }
+
+   private:
+    void free() {
+        if (info.freeDecorated) {
+            BridgeFree(info.decoratedSymbol);
+        }
+        if (info.freeUndecorated) {
+            BridgeFree(info.undecoratedSymbol);
+        }
+    }
+
+    SYMBOLINFO info{};
+};
+
 DWORD_PTR GetCpuModule() {
     SELECTIONDATA selection;
     if (!GuiSelectionGet(GUI_DISASSEMBLY, &selection)) {
@@ -159,6 +189,193 @@ DWORD_PTR GetCfgFunctionTable(DWORD_PTR module,
     return guardCFFunctionTable;
 }
 
+#ifdef _WIN64
+using ExecutableRegionsMap =
+    std::map<DWORD_PTR, std::vector<BYTE>, std::greater<DWORD_PTR>>;
+
+ExecutableRegionsMap GetModuleExecutableRegionsMap(DWORD_PTR module,
+                                                   DWORD_PTR* warningCount) {
+    constexpr DWORD_PTR kPageSize = 0x1000;
+
+    DWORD_PTR moduleSize = DbgFunctions()->ModSizeFromAddr(module);
+    DWORD_PTR moduleEnd = module + moduleSize;
+
+    ExecutableRegionsMap executableRegions;
+
+    for (DWORD_PTR p = module; p < moduleEnd; p += kPageSize) {
+        DWORD_PTR executableRegionAddress = p;
+        DWORD_PTR executableRegionSize = 0;
+
+        for (; p < moduleEnd; p += kPageSize) {
+            char rights[RIGHTS_STRING_SIZE];
+            if (!DbgFunctions()->GetPageRights(p, rights)) {
+                (*warningCount)++;
+                _plugin_logprintf(
+                    "Warning: Failed to get page access rights for %p\n", p);
+                break;
+            }
+
+            if (rights[0] != 'E') {
+                break;
+            }
+
+            executableRegionSize += kPageSize;
+        }
+
+        if (!executableRegionSize) {
+            continue;
+        }
+
+        std::vector<BYTE> buffer(executableRegionSize, 0);
+        if (!DbgMemRead(executableRegionAddress, buffer.data(),
+                        buffer.size())) {
+            (*warningCount)++;
+            _plugin_logprintf("Warning: Failed to read %p bytes at %p\n",
+                              buffer.size(), executableRegionAddress);
+            continue;
+        }
+
+        executableRegions[executableRegionAddress] = std::move(buffer);
+    }
+
+    return executableRegions;
+}
+
+std::string GetCommentForXfgTargets(std::span<const DWORD_PTR> xfgEntries) {
+    std::string comment = std::to_string(xfgEntries.size()) + "fn: ";
+
+    bool first = true;
+
+    for (DWORD_PTR xfgEntry : xfgEntries) {
+        if (first) {
+            first = false;
+        } else {
+            comment += ", ";
+        }
+
+        DWORD_PTR function = xfgEntry + sizeof(DWORD_PTR);
+
+        SymbolInfoWrapper info;
+        char symbolNameOnly[1024];
+        if (!DbgGetSymbolInfoAt(function, info.put()) ||
+            !info->decoratedSymbol ||
+            !UnDecorateSymbolName(info->decoratedSymbol, symbolNameOnly,
+                                  ARRAYSIZE(symbolNameOnly),
+                                  UNDNAME_NAME_ONLY)) {
+            char buffer[32];
+            sprintf_s(buffer, "%p", reinterpret_cast<void*>(function));
+            comment += buffer;
+        } else {
+            comment += symbolNameOnly;
+        }
+    }
+
+    return comment;
+}
+
+struct MarkXrefAndCommentsResult {
+    DWORD_PTR xrefCount;
+    DWORD_PTR commentCount;
+    DWORD_PTR warningCount;
+};
+
+std::optional<MarkXrefAndCommentsResult> MarkXrefAndComments(
+    DWORD_PTR module,
+    std::span<const DWORD_PTR> xfgEntries) {
+    MarkXrefAndCommentsResult result{};
+
+    auto executableRegions =
+        GetModuleExecutableRegionsMap(module, &result.warningCount);
+
+    struct XfgHashInfo {
+        std::vector<DWORD_PTR> entries;
+        std::string comment;
+    };
+
+    std::unordered_map<DWORD_PTR, XfgHashInfo> xfgHashes;
+
+    for (DWORD_PTR xfgEntry : xfgEntries) {
+        // Find the executable region starting at or before the xfg entry.
+        auto it = executableRegions.lower_bound(xfgEntry);
+        if (it == executableRegions.end()) {
+            result.warningCount++;
+            _plugin_logprintf(
+                "Warning: Failed to find memory region for XFG entry %p\n",
+                xfgEntry);
+            continue;
+        }
+
+        DWORD_PTR executableRegionAddress = it->first;
+        DWORD_PTR executableRegionSize = it->second.size();
+
+        DWORD_PTR xfgEntryOffset = xfgEntry - executableRegionAddress;
+        if (xfgEntryOffset + sizeof(DWORD_PTR) >
+            executableRegionAddress + executableRegionSize) {
+            result.warningCount++;
+            _plugin_logprintf(
+                "Warning: Failed to find memory region for XFG entry %p\n",
+                xfgEntry);
+            continue;
+        }
+
+        DWORD_PTR xfgHash =
+            *reinterpret_cast<DWORD_PTR*>(it->second.data() + xfgEntryOffset) &
+            ~1;
+        xfgHashes[xfgHash].entries.push_back(xfgEntry);
+    }
+
+    // For example: 49:BA 70D95B74A18F04A6 | mov r10,A6048FA1745BD970
+    constexpr BYTE kXfgHashUsagePrefix[] = {0x49, 0xBA};
+
+    for (const auto& [executableRegionAddress, executableRegion] :
+         executableRegions) {
+        auto p = executableRegion.begin();
+
+        while (true) {
+            auto it = std::search(p, executableRegion.end(),
+                                  std::begin(kXfgHashUsagePrefix),
+                                  std::end(kXfgHashUsagePrefix));
+            if (it == executableRegion.end()) {
+                break;
+            }
+
+            p = it + ARRAYSIZE(kXfgHashUsagePrefix);
+            if (p + sizeof(DWORD_PTR) > executableRegion.end()) {
+                break;
+            }
+
+            DWORD_PTR xfgHash = *reinterpret_cast<const DWORD_PTR*>(&*p) & ~1;
+            auto xfgHashInfoIt = xfgHashes.find(xfgHash);
+            if (xfgHashInfoIt == xfgHashes.end()) {
+                continue;
+            }
+
+            auto& xfgHashInfo = xfgHashInfoIt->second;
+
+            DWORD_PTR xfgUsageCommand =
+                executableRegionAddress + (it - executableRegion.begin());
+
+            for (DWORD_PTR xfgEntry : xfgHashInfo.entries) {
+                DWORD_PTR function = xfgEntry + sizeof(DWORD_PTR);
+                DbgXrefAdd(xfgUsageCommand, function);
+                DbgXrefAdd(function, xfgUsageCommand);
+                result.xrefCount++;
+            }
+
+            if (xfgHashInfo.comment.empty()) {
+                xfgHashInfo.comment =
+                    GetCommentForXfgTargets(xfgHashInfo.entries);
+            }
+
+            DbgSetAutoCommentAt(xfgUsageCommand, xfgHashInfo.comment.c_str());
+            result.commentCount++;
+        }
+    }
+
+    return result;
+}
+#endif  // _WIN64
+
 bool XfgMark() {
     DWORD_PTR module = GetCpuModule();
     if (!module) {
@@ -192,7 +409,11 @@ bool XfgMark() {
 
     DWORD_PTR cfgFunctionTablePtr = cfgFunctionTable;
 
-    DWORD_PTR xfgCount = 0;
+    std::vector<DWORD_PTR> xfgEntries;
+
+    DWORD_PTR xfgEntriesMarked = 0;
+    DWORD_PTR warningCount = 0;
+
     for (DWORD_PTR i = 0; i < cfgFunctionCount; i++) {
         DWORD rva;
         if (!ReadMemAndAdvance(&cfgFunctionTablePtr, &rva)) {
@@ -208,24 +429,61 @@ bool XfgMark() {
 
         if ((value & IMAGE_GUARD_FLAG_FID_XFG) != 0) {
             DWORD_PTR xfgEntry = module + rva - 8;
-            if (!DbgSetEncodeType(xfgEntry, 8, enc_qword)) {
+            xfgEntries.push_back(xfgEntry);
+
+            if (DbgSetEncodeType(xfgEntry, 8, enc_qword)) {
+                xfgEntriesMarked++;
+            } else {
+                warningCount++;
                 _plugin_logprintf("Warning: Failed to mark %p XFG entry\n",
                                   xfgEntry);
-            } else {
-                xfgCount++;
             }
         }
 
         cfgFunctionTablePtr += mdSize;
     }
 
-    if (xfgCount > 0) {
+    if (!xfgEntries.empty()) {
         // GuiUpdateDisassemblyView didn't always work for me. Reference for
         // DbgCmdExec:
         // https://github.com/x64dbg/x64dbg/blob/b6348f5b791899125003be156b2323d0c763f161/src/dbg/commands/cmd-types.cpp#L31
         DbgCmdExec("disasm dis.sel()");
 
-        _plugin_logprintf("Marked %" PRIuPTR " XFG entries\n", xfgCount);
+        std::string msg;
+
+        if (xfgEntries.size() == xfgEntriesMarked) {
+            msg += "Found and marked " + std::to_string(xfgEntries.size()) +
+                   " XFG entries";
+        } else {
+            msg += "Found " + std::to_string(xfgEntries.size()) +
+                   " XFG entries, marked " + std::to_string(xfgEntriesMarked) +
+                   " entries";
+        }
+
+#ifdef _WIN64
+        if (auto markXrefAndCommentsResult =
+                MarkXrefAndComments(module, xfgEntries)) {
+            if (markXrefAndCommentsResult->xrefCount > 0) {
+                msg += ", added " +
+                       std::to_string(markXrefAndCommentsResult->xrefCount) +
+                       " xrefs";
+            }
+
+            if (markXrefAndCommentsResult->commentCount > 0) {
+                msg += ", added " +
+                       std::to_string(markXrefAndCommentsResult->commentCount) +
+                       " comments";
+            }
+
+            warningCount += markXrefAndCommentsResult->warningCount;
+        }
+#endif  // _WIN64
+
+        if (warningCount > 0) {
+            msg += " (" + std::to_string(warningCount) + " warnings, see log)";
+        }
+
+        _plugin_logputs(msg.c_str());
     } else {
         _plugin_logputs("No XFG entries were found");
     }
