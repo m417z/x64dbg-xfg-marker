@@ -517,6 +517,47 @@ bool XfgMarkCmd(int argc, char** argv) {
     return XfgMark();
 }
 
+void OpenUrl(HWND hWnd, PCWSTR url) {
+    if ((INT_PTR)ShellExecute(hWnd, L"open", url, nullptr, nullptr,
+                              SW_SHOWNORMAL) <= 32) {
+        MessageBox(hWnd, L"Failed to open link", nullptr, MB_ICONHAND);
+    }
+}
+
+void About(HWND hWnd) {
+    PCWSTR content =
+        TEXT(PLUGIN_NAME) L" v" TEXT(PLUGIN_VERSION_STR) L"\n"
+        L"By m417z\n"
+        L"\n"
+        L"Source code:\n"
+        L"<A HREF=\"https://github.com/m417z/x64dbg-xfg-marker\">https://github.com/m417z/x64dbg-xfg-marker</a>\n"
+        L"\n"
+        L"Blog post:\n"
+        L"<A HREF=\"https://m417z.com/Leveraging-XFG-to-help-with-reverse-engineering/\">https://m417z.com/Leveraging-XFG-to-help-with-reverse-engineering/</a>";
+
+    TASKDIALOGCONFIG taskDialogConfig{
+        .cbSize = sizeof(taskDialogConfig),
+        .hwndParent = hWnd,
+        .hInstance = g_hDllInst,
+        .dwFlags = TDF_ENABLE_HYPERLINKS,
+        .pszWindowTitle = L"About",
+        .pszMainIcon = TD_INFORMATION_ICON,
+        .pszContent = content,
+        .pfCallback = [](HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+                         LONG_PTR lpRefData) -> HRESULT {
+            switch (msg) {
+                case TDN_HYPERLINK_CLICKED:
+                    OpenUrl(hwnd, (PCWSTR)lParam);
+                    break;
+            }
+
+            return S_OK;
+        },
+    };
+
+    TaskDialogIndirect(&taskDialogConfig, nullptr, nullptr, nullptr);
+}
+
 }  // namespace
 
 BOOL APIENTRY DllMain(HMODULE hModule,
@@ -621,13 +662,7 @@ extern "C" DLL_EXPORT void CBMENUENTRY(CBTYPE, PLUG_CB_MENUENTRY* info) {
             break;
 
         case MENU_ABOUT:
-            MessageBoxA(GetActiveWindow(),
-                        PLUGIN_NAME
-                        " v" PLUGIN_VERSION_STR
-                        "\n"
-                        "By m417z\n"
-                        "https://github.com/m417z/x64dbg-xfg-marker",
-                        "About", MB_ICONINFORMATION);
+            About(GetActiveWindow());
             break;
     }
 }
