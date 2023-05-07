@@ -249,17 +249,16 @@ ExecutableRegionsMap GetModuleExecutableRegionsMap(DWORD_PTR module,
 }
 
 std::string GetCommentForXfgTargets(std::span<const DWORD_PTR> xfgEntries) {
-    std::string comment = std::to_string(xfgEntries.size()) + "fn: ";
+    // Sort by length, then alphabetically.
+    // https://stackoverflow.com/a/45865459
+    auto labelsCmp = [](const std::string& lhs, const std::string& rhs) {
+        return std::make_pair(lhs.length(), std::cref(lhs)) <
+               std::make_pair(rhs.length(), std::cref(rhs));
+    };
 
-    bool first = true;
+    std::map<std::string, int, decltype(labelsCmp)> labels(labelsCmp);
 
     for (DWORD_PTR xfgEntry : xfgEntries) {
-        if (first) {
-            first = false;
-        } else {
-            comment += ", ";
-        }
-
         DWORD_PTR function = xfgEntry + sizeof(DWORD_PTR);
 
         SymbolInfoWrapper info;
@@ -268,15 +267,36 @@ std::string GetCommentForXfgTargets(std::span<const DWORD_PTR> xfgEntries) {
             UnDecorateSymbolName(info->decoratedSymbol, symbolNameOnly,
                                  ARRAYSIZE(symbolNameOnly),
                                  UNDNAME_NAME_ONLY)) {
-            comment += symbolNameOnly;
+            labels[symbolNameOnly]++;
         } else {
             char label[MAX_LABEL_SIZE] = "";
             if (!DbgGetLabelAt(function, SEG_DEFAULT, label)) {
                 sprintf_s(label, "%p", reinterpret_cast<void*>(function));
             }
 
-            comment += label;
+            labels[label]++;
         }
+    }
+
+    std::string comment;
+
+    for (const auto& [label, count] : labels) {
+        if (!comment.empty()) {
+            comment += ", ";
+        }
+
+        comment += label;
+
+        if (count > 1) {
+            comment += " (" + std::to_string(count) + ")";
+        }
+    }
+
+    comment = std::to_string(labels.size()) + "fn: " + comment;
+
+    if (comment.size() >= MAX_COMMENT_SIZE - 1) {
+        comment.resize(MAX_COMMENT_SIZE - 5);
+        comment += "...";
     }
 
     return comment;
