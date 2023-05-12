@@ -7,6 +7,8 @@
 #include <commctrl.h>
 #include <shellapi.h>
 
+#include <inttypes.h>
+
 #include <algorithm>
 #include <map>
 #include <optional>

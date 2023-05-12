@@ -237,7 +237,8 @@ ExecutableRegionsMap GetModuleExecutableRegionsMap(DWORD_PTR module,
         if (!DbgMemRead(executableRegionAddress, buffer.data(),
                         buffer.size())) {
             (*warningCount)++;
-            _plugin_logprintf("Warning: Failed to read %p bytes at %p\n",
+            _plugin_logprintf("Warning: Failed to read %" PRIuPTR
+                              " bytes at %p\n",
                               buffer.size(), executableRegionAddress);
             continue;
         }
@@ -356,6 +357,8 @@ std::optional<MarkXrefAndCommentsResult> MarkXrefAndComments(
     // For example: 49:BA 70D95B74A18F04A6 | mov r10,A6048FA1745BD970
     constexpr BYTE kXfgHashUsagePrefix[] = {0x49, 0xBA};
 
+    std::vector<XREF_EDGE> xrefs;
+
     for (const auto& [executableRegionAddress, executableRegion] :
          executableRegions) {
         auto p = executableRegion.begin();
@@ -387,9 +390,8 @@ std::optional<MarkXrefAndCommentsResult> MarkXrefAndComments(
             if (g_addXrefs) {
                 for (DWORD_PTR xfgEntry : xfgHashInfo.entries) {
                     DWORD_PTR function = xfgEntry + sizeof(DWORD_PTR);
-                    DbgXrefAdd(xfgUsageCommand, function);
-                    DbgXrefAdd(function, xfgUsageCommand);
-                    result.xrefCount++;
+                    xrefs.push_back({xfgUsageCommand, function});
+                    xrefs.push_back({function, xfgUsageCommand});
                 }
             }
 
@@ -404,6 +406,14 @@ std::optional<MarkXrefAndCommentsResult> MarkXrefAndComments(
                 result.commentCount++;
             }
         }
+    }
+
+    result.xrefCount = DbgXrefAddMulti(xrefs.data(), xrefs.size());
+    if (result.xrefCount != xrefs.size()) {
+        result.warningCount++;
+        _plugin_logprintf("Warning: Failed to add all xrefs (added %" PRIuPTR
+                          " out of %" PRIuPTR ")\n",
+                          result.xrefCount, xrefs.size());
     }
 
     return result;
